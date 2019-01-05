@@ -1,3 +1,12 @@
 #!/bin/sh
 
-blender -b -P python_api/pypredef_gen.py
+if [ $# -ne 1 ]; then
+    echo "Usage: sh refresh_python_api <blender-dir>"
+    exit 1
+fi
+
+blender_exe=${1}
+
+echo ${blender_exe}
+
+${blender_exe} -b -noaudio -P python_api/pypredef_gen.py

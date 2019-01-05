@@ -83,6 +83,9 @@ INCLUDE_MODULES = (
     "bpy.utils",
     "bmesh",
     "bmesh.types",
+    "bmesh.geometry",
+    "bmesh.ops",
+    "bmesh.utils",
     "bge",
     "aud",
     "bgl",
@@ -743,7 +746,7 @@ def pyprop2predef(ident, fw, identifier, py_prop):
 
     fw(ident + "\n")
 
-def pyclass2predef(fw, module_name, type_name, value):
+def pyclass2predef(indent, fw, module_name, type_name, value):
     ''' Creates declaration of a class
         Details:
         @fw (function): the unified shortcut to print() or file.write() function
@@ -751,7 +754,7 @@ def pyclass2predef(fw, module_name, type_name, value):
         @type_name (string): the name of the class
         @value (<class type>): the descriptor of this type
     '''
-    fw("class %s:\n" % type_name)
+    fw(indent + "class %s:\n" % type_name)
     definition = doc2definition(value.__doc__) #parse the eventual RST sphinx markup
     if "docstring" in definition:
         write_indented_lines("", fw, definition["docstring"], False)
@@ -760,40 +763,43 @@ def pyclass2predef(fw, module_name, type_name, value):
 
     for key, descr in descr_items:
         if type(descr) == ClassMethodDescriptorType:
-            py_descr2predef(_IDENT, fw, descr, module_name, type_name, key)
+            py_descr2predef(indent + _IDENT, fw, descr, module_name, type_name, key)
 
     for key, descr in descr_items:
         if type(descr) == MethodDescriptorType:
-            py_descr2predef(_IDENT, fw, descr, module_name, type_name, key)
+            py_descr2predef(indent + _IDENT, fw, descr, module_name, type_name, key)
 
     for key, descr in descr_items:
         if type(descr) in {types.FunctionType, types.MethodType}:
-            pyfunc2predef(_IDENT, fw, key, descr)
+            pyfunc2predef(indent + _IDENT, fw, key, descr)
 
     for key, descr in descr_items:
         if type(descr) == types.GetSetDescriptorType:
-            py_descr2predef(_IDENT, fw, descr, module_name, type_name, key)
+            py_descr2predef(indent + _IDENT, fw, descr, module_name, type_name, key)
 
     for key, descr in descr_items:
         if type(descr) == PropertyType:
-            pyprop2predef(_IDENT, fw, key, descr)
+            pyprop2predef(indent + _IDENT, fw, key, descr)
 
     fw("\n\n")
 
-def pymodule2predef(BASEPATH, module_name, module, title):
+def pymodule2predef(BASEPATH, module_name, fake_class, module, title):
     attribute_set = set()
     filepath = os.path.join(BASEPATH, module_name + ".py")
 
-    file = open(filepath, "w")
+    file = open(filepath, "a")
     fw = file.write
     #fw = print
 
     #The description of this module:
-    if module.__doc__:
+    if hasattr(module, '__doc__') and module.__doc__:
         title = title + "\n" + module.__doc__
     definition = doc2definition(title,"") #skip the leading spaces at the first line...
     fw(definition["docstring"])
     fw("\n\n")
+
+    if fake_class != "":
+        fw(str("class ") + fake_class + ":\n")
 
     # write members of the module
     # only tested with PyStructs which are not exactly modules
@@ -803,7 +809,7 @@ def pymodule2predef(BASEPATH, module_name, module, title):
             continue
         # naughty, we also add getset's into PyStructs, this is not typical py but also not incorrect.
         if type(descr) == types.GetSetDescriptorType :  # 'bpy_app_type' name is only used for examples and messages
-            py_descr2predef("", fw, descr, module_name, "bpy_app_type", key)
+            py_descr2predef(_IDENT, fw, descr, module_name, "bpy_app_type", key)
             attribute_set.add(key)
 
     # Then list the attributes:
@@ -812,7 +818,7 @@ def pymodule2predef(BASEPATH, module_name, module, title):
             continue
         # naughty, we also add getset's into PyStructs, this is not typical py but also not incorrect.
         if type(descr) == types.MemberDescriptorType:  # 'bpy_app_type' name is only used for examples and messages
-            py_descr2predef("", fw, descr, module_name, "", key)
+            py_descr2predef(_IDENT, fw, descr, module_name, "", key)
             attribute_set.add(key)
 
     del key, descr
@@ -834,12 +840,17 @@ def pymodule2predef(BASEPATH, module_name, module, title):
             value_type = type(value)
 
             if value_type == types.FunctionType:
-                pyfunc2predef("", fw, attribute, value, is_class=False)
+                pyfunc2predef(_IDENT, fw, attribute, value, is_class=False)
+#                pyfunc2predef("", fw, attribute, value, is_class=False)
 
             elif value_type in (types.BuiltinMethodType, types.BuiltinFunctionType):  # both the same at the moment but to be future proof
                 # note: can't get args from these, so dump the string as is
                 # this means any module used like this must have fully formatted docstrings.
-                py_c_func2predef("", fw, module_name, module, attribute, value, is_class=False)
+                py_c_func2predef(_IDENT, fw, module_name, module, attribute, value, is_class=False)
+#                py_c_func2predef("", fw, module_name, module, attribute, value, is_class=False)
+
+            elif str(value_type) == "<class 'BMeshOpFunc'>":
+                py_c_func2predef(_IDENT, fw, module_name, module, attribute, value, is_class=False)
 
             elif value_type == type:
                 classes.append((attribute, value))
@@ -850,7 +861,7 @@ def pymodule2predef(BASEPATH, module_name, module, title):
                 fw("{0} = {1} #constant value \n\n".format(attribute,repr(value)))
 
             else:
-                print("\tnot documenting %s.%s" % (module_name, attribute))
+                #print("\tnot documenting %s.%s" % (module_name, attribute))
                 continue
 
             attribute_set.add(attribute)
@@ -858,7 +869,7 @@ def pymodule2predef(BASEPATH, module_name, module, title):
 
     # write collected classes now
     for (type_name, value) in classes:
-        pyclass2predef(fw, module_name, type_name, value)
+        pyclass2predef(_IDENT, fw, module_name, type_name, value)
 
     file.close()
 
@@ -902,7 +913,7 @@ def rna_struct2predef(ident, fw, descr):
         @fw (function): the unified shortcut to print() or file.write() function
         @descr (rna_info.InfoStructRNA): the descriptor of a Blender Python class
     '''
-    print("class %s:\n" % descr.identifier)
+#    print("class %s:\n" % descr.identifier)
     definition = doc2definition(rna2list(descr))
     write_indented_lines(ident,fw, definition["declaration"],False)
 
@@ -992,14 +1003,14 @@ def bpy2predef(BASEPATH, title):
             if value_type:
                 fw("{0} = types.{1}\n".format(name, value_type.identifier))
             else:
-                pyclass2predef(fw, modulr, name, value)
+                pyclass2predef("", fw, modulr, name, value)
         fw("\n\n")
 
     #read all data:
     structs, funcs, ops, props = rna_info.BuildRNAInfo()
     #open the file:
     filepath = os.path.join(BASEPATH, "bpy.py")
-    file = open(filepath, "w")
+    file = open(filepath, "a")
     fw = file.write
     #Start the file:
     definition = doc2definition(title,"") #skip the leading spaces at the first line...
@@ -1049,8 +1060,8 @@ def rna2predef(BASEPATH):
     except:
         pass
 
-    if "bpy" in INCLUDE_MODULES:
-        bpy2predef(BASEPATH,"Blender API main module")
+#    if "bpy" in INCLUDE_MODULES:
+#        bpy2predef(BASEPATH,"Blender API main module")
     # internal modules
 
     module = None
@@ -1062,48 +1073,63 @@ def rna2predef(BASEPATH):
     # python modules
     if "bpy.utils" in INCLUDE_MODULES:
         from bpy import utils as module
-        pymodule2predef(BASEPATH, "bpy.utils", module, "Utilities (bpy.utils)")
+        pymodule2predef(BASEPATH, "bpy", "utils", module, "Utilities (bpy.utils)")
 
     if "bpy.path" in INCLUDE_MODULES:
         from bpy import path as module
-        pymodule2predef(BASEPATH, "bpy.path", module, "Path Utilities (bpy.path)")
+        pymodule2predef(BASEPATH, "bpy", "path", module, "Path Utilities (bpy.path)")
 
     # C modules
     if "bpy.app" in INCLUDE_MODULES:
         from bpy import app as module
-        pymodule2predef(BASEPATH, "bpy.app", module, "Application Data (bpy.app)")
+        pymodule2predef(BASEPATH, "bpy", "app", module, "Application Data (bpy.app)")
 
     if "bpy.props" in INCLUDE_MODULES:
         from bpy import props as module
-        pymodule2predef(BASEPATH, "bpy.props", module, "Property Definitions (bpy.props)")
+        pymodule2predef(BASEPATH, "bpy", "props", module, "Property Definitions (bpy.props)")
+
+    if "bpy" in INCLUDE_MODULES:
+        bpy2predef(BASEPATH,"Blender API main module")
 
     if "mathutils" in INCLUDE_MODULES:
         import mathutils as module
-        pymodule2predef(BASEPATH, "mathutils", module, "Math Types & Utilities (mathutils)")
+        pymodule2predef(BASEPATH, "mathutils", "", module, "Math Types & Utilities (mathutils)")
 
     if "mathutils.geometry" in INCLUDE_MODULES:
         import mathutils.geometry as module
-        pymodule2predef(BASEPATH, "mathutils.geometry", module, "Geometry Utilities (mathutils.geometry)")
+        pymodule2predef(BASEPATH, "mathutils", "geometry", module, "Geometry Utilities (mathutils.geometry)")
 
     if "blf" in INCLUDE_MODULES:
         import blf as module
-        pymodule2predef(BASEPATH, "blf", module, "Font Drawing (blf)")
+        pymodule2predef(BASEPATH, "blf", "", module, "Font Drawing (blf)")
 
     if "bgl" in INCLUDE_MODULES:
         import bgl as module
-        pymodule2predef(BASEPATH, "bgl", module, "Open GL functions (bgl)")
+        pymodule2predef(BASEPATH, "bgl", "", module, "Open GL functions (bgl)")
 
     if "aud" in INCLUDE_MODULES:
         import aud as module
-        pymodule2predef(BASEPATH, "aud", module, "Audio System (aud)")
+        pymodule2predef(BASEPATH, "aud", "", module, "Audio System (aud)")
 
     if "bmesh" in INCLUDE_MODULES:
         import bmesh as module
-        pymodule2predef(BASEPATH, "bmesh", module, "BMesh mesh manipulations (bmesh)")
+        pymodule2predef(BASEPATH, "bmesh", "", module, "BMesh mesh manipulations (bmesh)")
 
     if "bmesh.types" in INCLUDE_MODULES:
         import bmesh.types as module
-        pymodule2predef(BASEPATH, "bmesh.types", module, "BMesh mesh manipulations types (bmesh.types)")
+        pymodule2predef(BASEPATH, "bmesh", "types", module, "BMesh mesh manipulations types (bmesh.types)")
+
+    if "bmesh.geometry" in INCLUDE_MODULES:
+        import bmesh.geometry as module
+        pymodule2predef(BASEPATH, "bmesh", "geometry", module, "BMesh mesh manipulations geometry (bmesh.geometry)")
+
+    if "bmesh.utils" in INCLUDE_MODULES:
+        import bmesh.utils as module
+        pymodule2predef(BASEPATH, "bmesh", "utils", module, "BMesh mesh manipulations utils (bmesh.utils)")
+
+    if "bmesh.ops" in INCLUDE_MODULES:
+        import bmesh.ops as module
+        pymodule2predef(BASEPATH, "bmesh", "ops", module, "BMesh mesh manipulations operators (bmesh.ops)")
 
     del module
 
